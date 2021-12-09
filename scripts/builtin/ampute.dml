@@ -37,19 +37,345 @@
 # mech            String    ---        A string specifying the missingness mechanism, either "MCAR", "MAR" or "MNAR"
 # weights         Double    ---        A matrix or data frame of size #patterns by #variables.
 #                                       The matrix contains the weights that will be used to calculate the weighted sum scores.
+# std             Boolean   ---        Whether the weighted sum scores should be calculated with standardized data or with non-standardized data.
+# cont            Boolean   ---        Whether the probabilities should be based on a continuous or a discrete distribution.
+# type            String    ---        #TODO STRING VECTOR: A string (or vector of strings NOT YET) containing the type of missingness for each pattern. Either "LEFT", "MID", "TAIL" or '"RIGHT". 
+#                                      If a single missingness type is given, all patterns will be created with the same type. 
+#                                      (-1="LEFT", 0="MID", 1 = "RIGHT", 2="TAIL"), default="RIGHT"
+#                                      If the missingness types should differ between patterns, a vector of missingness types should be given. Default is RIGHT.
+# odds            Double    ---        A matrix where #patterns defines the #rows. Each row should contain the odds of being missing for the corresponding pattern.
+# bycases         Boolean   ---        If TRUE, the proportion of missingness is defined in terms of cases. If FALSE, the proportion of missingness is defined in terms of cells. Default is TRUE.
+# run             Boolean   ---        If TRUE, the amputations are implemented. If FALSE, the return object will contain everything except for the amputed data set.
 # ---------------------------------------------------------------------------------------------
  
 #Output(s)
 # ---------------------------------------------------------------------------------------------
-# NAME                  TYPE    DEFAULT     MEANING
+# NAME            TYPE    DEFAULT     MEANING
 # ---------------------------------------------------------------------------------------------
 # amputedData     Double    ---        amputed dataset
 
 
-m_ampute = function(Matrix[Double] data, Double prop, Matrix[Double] patterns, Matrix[Double] freq, 
-    String mech, Matrix[Double] weights
+m_ampute = function(Matrix[Double] data, Double prop = 0.5, Matrix[Double] patterns = matrix(0, rows=0, cols=0), Matrix[Double] freq = matrix(0, rows=0, cols=0), 
+    String mech = "MAR", Matrix[Double] weights = matrix(0, rows=0, cols=0),  Boolean std = TRUE, Boolean cont = TRUE, Matrix[Double] type = matrix(1, rows=0, cols=0),
+    Matrix[Double] odds = matrix(0, rows=0, cols=0), Boolean bycases = TRUE, Boolean run = TRUE
   )
   return(Matrix[Double] amputedData)
 {
+    ################
+    # SANITY CHECKS
+    if (sum(is.na(data) != 0)) {
+      stop("Input Error: input data already contains missing values but has to be complete")
+    }
+    if (ncol(data) < 2) {
+        stop("Input Error: data should contain at least two columns")
+    }
+    if (prop < 0 | prop > 100) {
+      stop("Proportion of missingness should be a value between 0 and 1 (for a proportion) or between 1 and 100 (for a percentage)")
+    } else if (prop > 1) {
+      prop = prop / 100.0
+    }
+    if (length(patterns) == 0) {
+      patterns = ampute_default_patterns(ncol(data))
+    } else if ((ncol(patterns) == 1 | nrow(patterns) == 1) & (length(patterns) %% ncol(data) == 0)) {
+      numPatternRows = length(patterns) / ncol(data)
+      numPatternCols = length(patterns) / numPatternRows
+      patterns = matrix(patterns, numPatternRows, numPatternCols)
+      if (sum(patterns == matrix(1, rows=numPatternRows, cols=numPatternCols)) == numPatternRows * numPatternCols) {
+        stop("All pattern entries containing ones leads to no amputations at all")
+      }
+    }
+    if (ncol(patterns) != ncol(data)) {
+      stop("Input Error: number of columns of patterns and data have to be identical")
+    }
+    if (length(freq) == 0) {
+      freq = ampute_default_freq(patterns)
+    }
+    if ((nrow(freq) != nrow(patterns) & ncol(freq) != 1)) {
+      stop("Input Error: the frequency vector has to be of shape (nrow(patterns), 1)")
+    }
+    if (sum(freq) != 1.0) {
+      freq = freq / sum(freq)
+      print("Warning: the sum of frequencies should equal 1.0, normalized them by freq/sum(freq) to " + toString(t(freq), sep="|"))
+    }
+    [newPatterns, newFreq, newProp, rowOneMask, rowZeroMask] = ampute_check_patterns(patterns, freq, prop)
+    freq = newFreq
+    prop = newProp
+    patterns = newPatterns
+    if (!bycases) {
+      prop = ampute_recalculate_prop(prop, ncol(data), patterns, freq)
+    }
+    if (mech != "MCAR" & mech != "MAR" & mech != "MNAR") {
+      stop("Input Error: mech has to be any of {'MCAR', 'MAR', 'MNAR'}")
+    }
+    if (mech == "MAR" & sum(rowZeroMask) != 0) {
+      stop("Input Error: patterns object contains row of zeros and this kind of pattern is not possible when mechanism is MAR")
+    }
+    if (mech == "MCAR" & length(weights) != 0) {
+      weights = matrix(0, rows=0, cols=0)
+      print("Warning: weights are not used for mechanism MCAR")
+    }
+    if (mech == "MCAR" & length(odds) != 0) {
+      odds = matrix(0, rows=0, cols=0)
+      print("Warning: Odds matrix is not used when mechanism is MCAR")
+    }
+    if (mech != "MCAR" & length(weights) != 0) {
+      if ((ncol(weights) == 1 | nrow(weights) == 1) & (length(weights) %% ncol(data) == 0)) {
+        numWeightsRows = length(weights) / ncol(data)
+        numWeightsCols = length(weights) / numPatternRows
+        weights = matrix(weights, rows=numWeightsRows, cols=numWeightsCols)
+      }
+      else if ((ncol(weights) == 1 | nrow(weights) == 1)) {
+        stop("Length of weight vector does not match #variables")
+      }
+    }
+    if (length(weights) == 0) {
+      weights = ampute_default_weights(patterns, mech)
+    }
+    if (nrow(weights) != nrow(patterns)) {
+      if(nrow(weights) - sum(rowOneMask) == nrow(patterns) & nrow(weights) == nrow(rowOneMask)) {
+        slicedWeights = matrix(0, rows=nrow(patterns), cols=ncol(patterns))
+        insertIndex = 1
+        for (i in 1:nrow(rowOneMask)) {
+          if (as.scalar(rowOneMask[i,1]) != 1) {
+            slicedWeights[insertIndex, ] = weights[i, ]
+            insertIndex = insertIndex + 1
+          }
+        }
+        weights = slicedWeights
+      } else {
+        stop("Error: there is some dimension missmatch between weights and patterns")
+      }
+    }
+    if (nrow(weights) != nrow(patterns) | ncol(weights) != ncol(patterns)) {
+      stop("Input Error: weights input has to be of same dimensions as patterns")
+    }
+    if (!cont & length(type) > 0) {
+      type = matrix(0, rows=0, cols=0)
+      print("Warning: type is not used when discrete probabilities (cont == FALSE) are specified")
+    }
+    if (length(type) == 0) {
+      type = ampute_default_type(patterns)
+    }
+    if (sum(type != -1 & type != 0 & type != 1 & type != 2) > 0) {
+      stop("Input Error: type vector contains unspecified entries, only -1, 0, 1, 2 are permitted")
+    }
+    if (length(type) != nrow(patterns) & length(type) != 1) {
+      if (length(type) != nrow(patterns) + sum(rowOneMask)) {
+        print("Warning: Type should either have length 1 or length equal #patterns, first element is used for all patterns.")
+        type = matrix(type[1,1], rows=nrow(patterns), cols=1)
+      } else {
+        type = removeEmpty(target=type, margin="rows", select=!rowOneMask)
+      }
+    }
+    if(mech != "MCAR" & length(odds) > 0) {
+      if (nrow(odds) != nrow(patterns)) {
+        if (nrow(odds) != nrow(patterns) + sum(rowOneMask)) {
+          stop("Input Error: number of odds rows doesn't match number of patterns")
+        } else {
+          odds = removeEmpty(target=odds, margin="rows", select=!rowOneMask)
+        }
+      }
+    }
+    if (length(odds) == 0) {
+      odds = ampute_default_odds(patterns)
+    }
+    if (!cont & sum(odds < 0) != 0) {
+      stop("Error: odds matrix can only contain positive values")
+    }
+    if (nrow(odds) != nrow(patterns)) {
+      stop("Error: mismatch between number of odds rows and number fo patterns")
+    }
+    ################
     amputedData = data
+    if (run) {
+      P = ampute_prob_sample_replace(sampleValues=seq(1, nrow(patterns), 1), probabilities=freq, sampleSize=nrow(data)) + 1 
+      #P = sample(nrow(patterns), nrow(data), TRUE)
+
+      # TODO?: check if all patterns are used
+
+      if (mech == "MCAR") {
+        R = ampute_ampute_mcar(P, patterns, prop)
+      } else {
+        [scores, candidateMasks] = ampute_sum_scores(P, data, std, weights, patterns)
+        print(toString(candidateMasks[1,1]))
+        print(toString(scores[1,1]))
+        if (!cont) {
+          R = ampute_ampute_discrete(P, scores, odds, prop)
+        } else {
+          #TODO? round(prop, 3)
+          R = ampute_ampute_continous(P, scores, prop, type)
+        }
+      }
+      amputedData = ampute_apply_missing_data(data, patterns, P, R)
+    }
+    
+}
+########################################################################################################################
+ampute_check_patterns = function(Matrix[Double] patterns, Matrix[Double] freq, Double prop) 
+  return(Matrix[Double] patterns, Matrix[Double] freq, Double prop, Matrix[Double] allOnesRowMask, Matrix[Double] allZerosRowMask)
+{
+  if (sum(patterns != 0 & patterns != 1) > 0) {
+    stop("Pattern Error: Argument patterns can only contain 0 or 1 but contains other values")
+  }
+  allOnesRowMask = rowSums(patterns) == ncol(patterns)
+  notAllOnesRowMask = !allOnesRowMask
+  propOne = as.scalar(t(freq) %*% allOnesRowMask)
+  if (propOne != 0) {
+    newProp = (1 - propOne) * prop
+    print("Warning: Proportion of missingness has changed from " + prop + " to " + newProp  + " because of pattern(s) with merely ones")
+    newFreq = removeEmpty(target=freq, margin="rows", select=notAllOnesRowMask)
+    newPatterns = removeEmpty(target=patterns, margin="rows", select=notAllOnesRowMask)
+    newFreq = newFreq / sum(newFreq)
+    freq = newFreq
+    patterns = newPatterns
+    prop = newProp
+  }
+  allZerosRowMask = rowSums(patterns) == 0
+
+}
+########################################################################################################################
+ampute_default_patterns = function (Integer numDataColumns) 
+  return(Matrix[Double] patterns) 
+{
+  patterns = matrix(1.0, rows=numDataColumns, cols=numDataColumns) - diag(matrix(1.0, rows=numDataColumns, cols=numDataColumns))
+}
+########################################################################################################################
+ampute_default_freq = function (Matrix[Double] patterns) 
+  return(Matrix[Double] freq) 
+{ 
+  numPatternRows = nrow(patterns)
+  freq = matrix(1, rows=numPatternRows, cols=1) / numPatternRows
+}
+########################################################################################################################
+ampute_recalculate_prop = function (Double prop, Integer numDataCols, Matrix[Double] patterns, Matrix[Double] freq) 
+  return(Double prop)
+{
+  miss = prop * numDataCols^2
+  sumCases = as.scalar(t(miss * freq) %*% (matrix(1.0, rows=nrow(patterns), cols=1) / rowSums(patterns == 0)))
+  if (sumCases > numDataCols) {
+    stop("Proportion of missing cells is too large in combination with the desired number of missing variables")
+  } else {
+    prop = sumCases / numDataCols
+  }
+}
+########################################################################################################################
+ampute_default_weights = function (Matrix[Double] patterns, String mech) 
+  return(Matrix[Double] weights)
+{
+  weights = matrix(1, rows=nrow(patterns), cols=ncol(patterns))
+  if (mech != "MNAR") {
+    weights = weights - (patterns == 0)
+  } else {
+    weights = weights - (patterns != 0)
+  }
+}
+########################################################################################################################
+ampute_default_type = function(Matrix[Double] patterns) 
+  return(Matrix[Double] type)
+{
+  type = matrix(1, rows=nrow(patterns), cols=1)
+}
+########################################################################################################################
+ampute_default_odds = function(Matrix[Double] patterns) 
+  return(Matrix[Double] odds)
+{
+  odds = t(seq(1,4,1) %*% matrix(1, rows=1, cols=nrow(patterns)))
+}
+########################################################################################################################
+ampute_prob_sample_replace = function(Matrix[Double] sampleValues, Matrix[Double] probabilities, Integer sampleSize) 
+  return(Matrix[Double] samples)
+{
+  if(length(sampleValues) != length(probabilities)){
+    stop("ERROR: mismatch between length of sampleValues and probabilities")
+  }
+  if(ncol(sampleValues) != 1 | ncol(probabilities) != 1) {
+    stop("ERROR: expecting a column vector for sampleValues and probabilities")
+  }
+  if(sum(probabilities) != 1) {
+    stop("ERROR: sum of probabilities is " + sum(probabilities) + " but has to be 1")
+  }
+
+  valueProbMap = cbind(probabilities, sampleValues)
+  ordered = order(target=valueProbMap, by=1, decreasing=TRUE, index.return=FALSE)
+  ordered[,1] = cumsum(ordered[,1])
+  randoms = rand(rows=sampleSize, cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
+  samples = matrix(0, rows=sampleSize, cols=1)
+  for (i in 1:nrow(randoms)) {
+    break = FALSE
+    j = 1
+    while (!break & j < nrow(ordered) + 1) {
+      if (as.scalar(randoms[i,1]) <= as.scalar(ordered[j,1])) {
+        samples[i,1] = ordered[j,2]
+        break = TRUE
+      }
+      j = j + 1 
+    }
+  }
+}
+########################################################################################################################
+ampute_sum_scores = function(Matrix[Double] P, Matrix[Double] data, Boolean std, Matrix[Double] weights, Matrix[Double] patterns) 
+  return(Matrix[Double] scores, Matrix[Double] candidateMasks) 
+{
+  
+  scores = matrix(0, rows=nrow(data), cols=1)
+  candidateMasks = matrix(0, rows=nrow(data), cols=(nrow(patterns)))
+  for (i in 1:nrow(patterns)) {
+    patternCandidatesMask = P == (i + 1)
+    candidateMasks[,i] = patternCandidatesMask
+    #no candidates for pattern in P
+    if (sum(patternCandidatesMask) == 0) {
+      scores[,i] = patternCandidatesMask
+    } else {
+      candidates = removeEmpty(target=data, margin="rows", select=patternCandidatesMask)
+      if (std) {
+        # TODO: length_unqique really necessary for runtime improvement?
+        if (sum(patternCandidatesMask) > 1) {
+          candidates = scale(X=candidates, center=TRUE, scale=TRUE)
+        }
+      }
+      patternScores = candidates %*% t(weights[i,])
+      if (length(patternScores) > 1) {
+        patternScores = scale(X=patternScores, center=TRUE, scale=TRUE)
+      }
+      initIndex = 1
+      for (r in 1:nrow(scores)) {
+        if (as.scalar(patternCandidatesMask[r, 1]) == 1) {
+          scores[r,1] = patternScores[initIndex, 1]
+          initIndex = initIndex + 1
+        }
+      }
+    }
+  }
+  # expecting nrow(P) ones
+  #checkMat = matrix(1, rows=nrow(P), cols=nrow(patterns))
+  #assert(sum(candidateMasks == checkMat) == nrow(P))
+  # expecting one 1 per row in candidateMasks
+  #checkVec = matrix(1, rows=nrow(P), cols=1)
+  #assert(sum(rowSums(candidateMasks) == checkVec) == nrow(P))
+  
+}
+########################################################################################################################
+ampute_ampute_mcar = function(Matrix[Double] P, Matrix[Double] patterns, Double prop) 
+  return(Matrix[Double] R) 
+{
+  R = rand(rows=nrow(P), cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
+}
+########################################################################################################################
+ampute_ampute_discrete = function(Matrix[Double] P, Matrix[Double] scores, Matrix[Double] odds, Double prop) 
+  return(Matrix[Double] R) 
+{
+  R = rand(rows=nrow(P), cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
+}
+########################################################################################################################
+ampute_ampute_continous = function(Matrix[Double] P, Matrix[Double] scores, Double prop, Matrix[Double] type) 
+  return(Matrix[Double] R) 
+{
+  R = rand(rows=nrow(P), cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
+}
+########################################################################################################################
+ampute_apply_missing_data = function(Matrix[Double] data, Matrix[Double] patterns, Matrix[Double] P, Matrix[Double] R)
+  return(Matrix[Double] amputedData)
+{
+  amputedData = data
+  amputedData[1,1] = NaN
 }

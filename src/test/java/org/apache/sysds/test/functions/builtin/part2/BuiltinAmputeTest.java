@@ -25,7 +25,7 @@ import java.util.Arrays;
 
 import org.apache.commons.lang.ArrayUtils;
 import org.apache.commons.math3.linear.MatrixUtils;
-
+import org.apache.hadoop.yarn.webapp.hamlet.HamletSpec.I;
 import org.apache.sysds.runtime.lineage.LineageCacheConfig.ReuseCacheType;
 import org.apache.sysds.runtime.meta.MatrixCharacteristics;
 import org.apache.sysds.test.AutomatedTestBase;
@@ -56,15 +56,33 @@ public class BuiltinAmputeTest extends AutomatedTestBase {
 	private final static String TEST_DIR = "functions/builtin/";
 	private static final String TEST_CLASS_DIR = TEST_DIR + BuiltinAmputeTest.class.getSimpleName() + "/";
 
-    private final static int numSamples = 3000;
+    private final static int numSamples = 10000;
 	private final static int numFeatures = 10;
 
     private final double[][] D = getRandomMatrix(numSamples, numFeatures, 0.0, 1.0, 1.0, 42);
-    private final double prop = 0.2;
-    private final double[][] patterns = MatrixUtils.createRealIdentityMatrix(numFeatures).getData();
+    private final double prop = 0.5;
+    private final double[][] patterns = getPatterns();
     private final double[][] frequencies = getFrequencies(true);
-    private final double[][] weights = getRandomMatrix(patterns.length, numFeatures, -1.0, 1.0, 0.2, 42);
+    private final double[][] weights = getRandomMatrix(patterns.length, numFeatures, 0.0, 1.0, 0.2, 42);
     
+
+    private double[][] getPatterns() {
+        double [][] tmpPatterns = new double[numFeatures][numFeatures];
+        for(int i = 0; i < numFeatures; i++) {
+            for (int j = 0; j < numFeatures; j++) {
+                if(i != j) tmpPatterns[i][j] = 1.0;
+                if (i == 0) {
+                    tmpPatterns[i][j] = 1.0;
+                }
+                // if (i == numFeatures - 1) {
+                //     tmpPatterns[i][j] = 0.0;
+                // }
+            }
+            
+        }
+        return tmpPatterns;
+    }
+
     private double [][] getFrequencies(boolean equal) {
         if (equal) {
             double[][] tmpFreq = new double[patterns.length][1];
@@ -98,8 +116,18 @@ public class BuiltinAmputeTest extends AutomatedTestBase {
 	}
 
     @Test
-	public void testAmputeMARCP() {
+    public void testAmputeMCAR() {
+		runAmputeTest(MissingnessMech.MCAR, ExecMode.SINGLE_NODE, false);
+	}
+
+    @Test
+	public void testAmputeMAR() {
 		runAmputeTest(MissingnessMech.MAR, ExecMode.SINGLE_NODE, false);
+	}
+
+    @Test
+	public void testAmputeMNAR() {
+		runAmputeTest(MissingnessMech.MNAR, ExecMode.SINGLE_NODE, false);
 	}
 
 

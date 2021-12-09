@@ -27,4 +27,3 @@ mechIn = $mech
 weightsIn = read($weights)
 result = ampute(data=dataIn, prop=propIn, patterns=patternsIn, freq=freqIn, mech=mechIn, weights=weightsIn)
 write(result, $amputedData)
-
