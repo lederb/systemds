@@ -25,5 +25,10 @@ patternsIn = read($patterns)
 freqIn = read($freq)
 mechIn = $mech
 weightsIn = read($weights)
-result = ampute(data=dataIn, prop=propIn, patterns=patternsIn, freq=freqIn, mech=mechIn, weights=weightsIn)
-write(result, $amputedData)
+
+amputedData = ampute(data=dataIn, prop=propIn, patterns=patternsIn, freq=freqIn, mech=mechIn, weights=weightsIn, std=$std, cont=$cont)
+write(amputedData, $amputedData)
+nanMask = is.na(amputedData)
+write(nanMask, $nanMask)
+amputedRowCount = sum(rowSums(nanMask) > 0)
+write(amputedRowCount, $amputedRowCount)

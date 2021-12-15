@@ -25,27 +25,37 @@
 # ---------------------------------------------------------------------------------------------
 # NAME            TYPE    DEFAULT     MEANING
 # ---------------------------------------------------------------------------------------------
-# data            Double    ---        A complete data matrix. Values should be numeric. 
-#                                       Categorical variables should have been transformed to dummies.
-# prop            Double    ---        A scalar specifying the proportion of missingness. 
-#                                       Should be a value between 0 and 1.
+# data            Double    ---        A complete data matrix. Values have to be numeric. 
+#                                       Categorical variables must have been transformed to dummies.
+# prop            Double    ---        A scalar specifying the proportion of missingness by rows (not cells). 
+#                                       Can be switched by "byCases" parameter. Should be a value between 0 and 1.
+#                                       Default is 0.5.
 # patterns        Double    ---        A matrix or data frame of size #patterns by #features, 
-#                                       where 0 indicates that a variable should have missing values and 1 indicates 
-#                                       that a variable should remain complete.
+#                                       where 0 indicates that a variable should have missing values and 1 indicates that a variable should remain complete.
+#                                       Default is generated if necessary.
 # freq            Double    ---        A column vector of length #patterns containing the relative frequency 
 #                                       with which the patterns should occur.
-# mech            String    ---        A string specifying the missingness mechanism, either "MCAR", "MAR" or "MNAR"
+#                                       Default is generated if necessary.
+# mech            String    ---        A string specifying the missingness mechanism, either "MCAR", "MAR" or "MNAR".
+#                                       Default is "MAR".
 # weights         Double    ---        A matrix or data frame of size #patterns by #variables.
 #                                       The matrix contains the weights that will be used to calculate the weighted sum scores.
+#                                       Default is generated if necessary.
 # std             Boolean   ---        Whether the weighted sum scores should be calculated with standardized data or with non-standardized data.
+#                                       Default is TRUE.
 # cont            Boolean   ---        Whether the probabilities should be based on a continuous or a discrete distribution.
+#                                       Default is TRUE.
 # type            String    ---        #TODO STRING VECTOR: A string (or vector of strings NOT YET) containing the type of missingness for each pattern. Either "LEFT", "MID", "TAIL" or '"RIGHT". 
-#                                      If a single missingness type is given, all patterns will be created with the same type. 
-#                                      (-1="LEFT", 0="MID", 1 = "RIGHT", 2="TAIL"), default="RIGHT"
-#                                      If the missingness types should differ between patterns, a vector of missingness types should be given. Default is RIGHT.
-# odds            Double    ---        A matrix where #patterns defines the #rows. Each row should contain the odds of being missing for the corresponding pattern.
-# bycases         Boolean   ---        If TRUE, the proportion of missingness is defined in terms of cases. If FALSE, the proportion of missingness is defined in terms of cells. Default is TRUE.
-# run             Boolean   ---        If TRUE, the amputations are implemented. If FALSE, the return object will contain everything except for the amputed data set.
+#                                       If a single missingness type is given, all patterns will be created with the same type. 
+#                                       (-1="LEFT", 0="MID", 1 = "RIGHT", 2="TAIL"), default="1 => RIGHT"
+#                                       If the missingness types should differ between patterns, a vector of missingness types should be given.
+#                                       Default is RIGHT.
+# odds            Double    ---        A matrix where #patterns defines the number of rows. Each row should contain the odds of being missing for the corresponding pattern.
+#                                       Default is generated if necessary.
+# bycases         Boolean   ---        If TRUE, the proportion of missingness is defined in terms of cases. If FALSE, the proportion of missingness is defined in terms of cells.
+#                                       Default is TRUE.
+# run             Boolean   ---        If TRUE, the amputations are implemented. If FALSE, the return object will contain the unamputed input dataset.
+#                                       Default is TRUE.
 # ---------------------------------------------------------------------------------------------
  
 #Output(s)
@@ -61,6 +71,7 @@ m_ampute = function(Matrix[Double] data, Double prop = 0.5, Matrix[Double] patte
   )
   return(Matrix[Double] amputedData)
 {
+    
     ################
     # SANITY CHECKS
     if (sum(is.na(data) != 0)) {
@@ -150,7 +161,7 @@ m_ampute = function(Matrix[Double] data, Double prop = 0.5, Matrix[Double] patte
       stop("Input Error: weights input has to be of same dimensions as patterns")
     }
     if (!cont & length(type) > 0) {
-      type = matrix(0, rows=0, cols=0)
+      type = matrix(1, rows=0, cols=0)
       print("Warning: type is not used when discrete probabilities (cont == FALSE) are specified")
     }
     if (length(type) == 0) {
@@ -185,25 +196,30 @@ m_ampute = function(Matrix[Double] data, Double prop = 0.5, Matrix[Double] patte
     if (nrow(odds) != nrow(patterns)) {
       stop("Error: mismatch between number of odds rows and number fo patterns")
     }
-    ################
+    ###################### INPUT CHECKS + DEFAULTS DONE ################################ 
     amputedData = data
     if (run) {
-      P = ampute_prob_sample_replace(sampleValues=seq(1, nrow(patterns), 1), probabilities=freq, sampleSize=nrow(data)) + 1 
-      #P = sample(nrow(patterns), nrow(data), TRUE)
-
-      # TODO?: check if all patterns are used
-
+      P = 1 + ampute_prob_sample_replace(sampleValues=seq(1, nrow(patterns), 1), probabilities=freq, sampleSize=nrow(data))
+      # CHECK for unique patterns selected
+      if (length(P) > 1) {
+        patternOccurrenceCounts = t(table(matrix(1, rows=nrow(P), cols=1), P - 1))
+        nonOccuringPatterns = patternOccurrenceCounts == 0
+        if (sum(nonOccuringPatterns) > 0) {
+          unusedPatternIndices = removeEmpty(target=seq(1,length(patternOccurrenceCounts),1), margin="rows", select=nonOccuringPatterns)
+          print("Warning: No records are assigned to patterns \n" + toString(t(unusedPatternIndices)) + "These patterns will not be generated. Consider reducing the number of patterns or increasing the dataset size.")
+        }
+      }
+      # calculate replacement matrix R for to be replaced rows by pattern
+      # #dataRows x #patterns
+      # row i of data will then be amputed according to pattern j if row is candidate for pattern and entry R[i,j] == 0
       if (mech == "MCAR") {
         R = ampute_ampute_mcar(P, patterns, prop)
       } else {
         [scores, candidateMasks] = ampute_sum_scores(P, data, std, weights, patterns)
-        print(toString(candidateMasks[1,1]))
-        print(toString(scores[1,1]))
         if (!cont) {
-          R = ampute_ampute_discrete(P, scores, odds, prop)
+          R = ampute_ampute_discrete(P, scores, candidateMasks, prop, odds)
         } else {
-          #TODO? round(prop, 3)
-          R = ampute_ampute_continous(P, scores, prop, type)
+          R = ampute_ampute_continous(P, scores, candidateMasks, prop, type)
         }
       }
       amputedData = ampute_apply_missing_data(data, patterns, P, R)
@@ -231,13 +247,12 @@ ampute_check_patterns = function(Matrix[Double] patterns, Matrix[Double] freq, D
     prop = newProp
   }
   allZerosRowMask = rowSums(patterns) == 0
-
 }
 ########################################################################################################################
 ampute_default_patterns = function (Integer numDataColumns) 
   return(Matrix[Double] patterns) 
 {
-  patterns = matrix(1.0, rows=numDataColumns, cols=numDataColumns) - diag(matrix(1.0, rows=numDataColumns, cols=numDataColumns))
+  patterns = matrix(1.0, rows=numDataColumns, cols=numDataColumns) - diag(matrix(1.0, rows=numDataColumns, cols=1))
 }
 ########################################################################################################################
 ampute_default_freq = function (Matrix[Double] patterns) 
@@ -316,19 +331,14 @@ ampute_prob_sample_replace = function(Matrix[Double] sampleValues, Matrix[Double
 ampute_sum_scores = function(Matrix[Double] P, Matrix[Double] data, Boolean std, Matrix[Double] weights, Matrix[Double] patterns) 
   return(Matrix[Double] scores, Matrix[Double] candidateMasks) 
 {
-  
   scores = matrix(0, rows=nrow(data), cols=1)
   candidateMasks = matrix(0, rows=nrow(data), cols=(nrow(patterns)))
   for (i in 1:nrow(patterns)) {
     patternCandidatesMask = P == (i + 1)
     candidateMasks[,i] = patternCandidatesMask
-    #no candidates for pattern in P
-    if (sum(patternCandidatesMask) == 0) {
-      scores[,i] = patternCandidatesMask
-    } else {
+    if (sum(patternCandidatesMask) > 0) {    
       candidates = removeEmpty(target=data, margin="rows", select=patternCandidatesMask)
       if (std) {
-        # TODO: length_unqique really necessary for runtime improvement?
         if (sum(patternCandidatesMask) > 1) {
           candidates = scale(X=candidates, center=TRUE, scale=TRUE)
         }
@@ -346,10 +356,10 @@ ampute_sum_scores = function(Matrix[Double] P, Matrix[Double] data, Boolean std,
       }
     }
   }
-  # expecting nrow(P) ones
+  #expecting nrow(P) ones
   #checkMat = matrix(1, rows=nrow(P), cols=nrow(patterns))
   #assert(sum(candidateMasks == checkMat) == nrow(P))
-  # expecting one 1 per row in candidateMasks
+  #expecting one 1 per row in candidateMasks
   #checkVec = matrix(1, rows=nrow(P), cols=1)
   #assert(sum(rowSums(candidateMasks) == checkVec) == nrow(P))
   
@@ -358,24 +368,71 @@ ampute_sum_scores = function(Matrix[Double] P, Matrix[Double] data, Boolean std,
 ampute_ampute_mcar = function(Matrix[Double] P, Matrix[Double] patterns, Double prop) 
   return(Matrix[Double] R) 
 {
-  R = rand(rows=nrow(P), cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
+  R = !(rand(rows=nrow(P), cols=nrow(patterns), min=0, max=1, pdf="uniform", sparsity=1) < prop)
 }
 ########################################################################################################################
-ampute_ampute_discrete = function(Matrix[Double] P, Matrix[Double] scores, Matrix[Double] odds, Double prop) 
+ampute_ampute_discrete = function(Matrix[Double] P, Matrix[Double] scores, Matrix[Double] candidateMasks, Double prop, Matrix[Double] odds) 
   return(Matrix[Double] R) 
 {
-  R = rand(rows=nrow(P), cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
+  Rtemp = matrix(0, rows=nrow(P), cols=ncol(candidateMasks))
+  for (p in 1:ncol(candidateMasks)){
+    if (sum(candidateMasks[,p]) > 0) {
+      oddsOfPattern = removeEmpty(target=odds[p,], margin="rows", select=is.na(odds[p,]))
+      ng = length(oddsOfPattern)
+      scoresOfPattern = removeEmpty(target=scores, margin="rows", select=candidateMasks[,p])
+      qPs = seq(0,1,1.0/ng)
+      quantiles = quantile(scoresOfPattern, qPs)
+      # check for sample too small -> not unique quantiles
+      I = rbind(matrix (1,1,1), (quantiles[1:nrow(quantiles)-1,] != quantiles[2:nrow(quantiles),]))
+      uniqueQuantiles = removeEmpty (target=quantiles, margin="rows", select = I)
+      if (length(uniqueQuantiles) < length(qPs) | sum(is.na(quantiles)) > 0 ) {
+        stop("Division of sum scores into quantiles did not succeed. Possibly" +
+             " the sum scores contain too few different observations (in case of" +
+             " categorical or dummy variables). Try using more variables to" +
+             " calculate the sum scores or diminish the number of quantiles in the" +
+             " odds matrix")
+      }
+      # For each candidate the quantile number of a candidate is specified
+      for (qIndex in 1:ng) {
+        Rtemp[,p] = Rtemp[,p] + (candidateMasks[,p] & (scores >= quantiles[qIndex,]))
+      }      
+      probVec = t((ng * prop * oddsOfPattern) / sum(oddsOfPattern))
+      if (sum(probVec >= 1) > 0) {
+        print("Warning: Combination of odds matrix and desired proportion of" +
+              " missingness results to small quantile groups, probably" +
+              " decreasing the obtained proportion of missingness")
+      }
+      
+      for (qIndex in 1:ng) {
+        Rtemp[,p] = replace(target=Rtemp[,p], pattern=qIndex, replacement=as.scalar(probVec[qIndex,1]))
+      }
+    }
+  }
+  # zeros will be used for indicating replacement
+  Rtemp = replace(target=Rtemp, pattern=0, replacement=NaN)
+  randoms = rand(rows=nrow(Rtemp), cols=ncol(Rtemp), min=0, max=1, pdf="uniform", sparsity=1)
+  # inversion of <= instead of > because of NaNs
+  R = !(randoms <= Rtemp)
 }
 ########################################################################################################################
-ampute_ampute_continous = function(Matrix[Double] P, Matrix[Double] scores, Double prop, Matrix[Double] type) 
+ampute_ampute_continous = function(Matrix[Double] P, Matrix[Double] scores, Matrix[Double] candidateMasks, Double prop, Matrix[Double] type) 
   return(Matrix[Double] R) 
 {
-  R = rand(rows=nrow(P), cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
+  R = !(rand(rows=nrow(P), cols=ncol(candidateMasks), min=0, max=1, pdf="uniform", sparsity=1.0) < 1)
 }
 ########################################################################################################################
 ampute_apply_missing_data = function(Matrix[Double] data, Matrix[Double] patterns, Matrix[Double] P, Matrix[Double] R)
   return(Matrix[Double] amputedData)
 {
-  amputedData = data
-  amputedData[1,1] = NaN
+  nanPatterns = replace(target=patterns, pattern=0, replacement=NaN)
+  nanMask = matrix(0, rows=nrow(data), cols=ncol(data))
+  for (i in 1:nrow(P)) {
+    chosenPattern = as.scalar(P[i,1]) - 1
+    if (chosenPattern > 0) {
+      if (as.scalar(R[i,chosenPattern]) == 0) {
+        nanMask[i,] = nanPatterns[chosenPattern, ]
+      }
+    }
+  }
+  amputedData = data + nanMask
 }

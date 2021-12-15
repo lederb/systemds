@@ -28,6 +28,7 @@ import org.apache.commons.math3.linear.MatrixUtils;
 import org.apache.hadoop.yarn.webapp.hamlet.HamletSpec.I;
 import org.apache.sysds.runtime.lineage.LineageCacheConfig.ReuseCacheType;
 import org.apache.sysds.runtime.meta.MatrixCharacteristics;
+import org.apache.sysds.runtime.meta.MetaData;
 import org.apache.sysds.test.AutomatedTestBase;
 import org.apache.sysds.test.TestConfiguration;
 import org.junit.Assert;
@@ -56,27 +57,24 @@ public class BuiltinAmputeTest extends AutomatedTestBase {
 	private final static String TEST_DIR = "functions/builtin/";
 	private static final String TEST_CLASS_DIR = TEST_DIR + BuiltinAmputeTest.class.getSimpleName() + "/";
 
-    private final static int numSamples = 10000;
-	private final static int numFeatures = 10;
+    private final static int numSamples = 1000;
+	private final static int numFeatures = 7;
 
-    private final double[][] D = getRandomMatrix(numSamples, numFeatures, 0.0, 1.0, 1.0, 42);
+    private final double[][] D = getRandomMatrix(numSamples, numFeatures, 1, 10, 1.0, 42);
     private final double prop = 0.5;
-    private final double[][] patterns = getPatterns();
+    private final double[][] patterns = getPatterns(false);
     private final double[][] frequencies = getFrequencies(true);
-    private final double[][] weights = getRandomMatrix(patterns.length, numFeatures, 0.0, 1.0, 0.2, 42);
+    private final double[][] weights = getRandomMatrix(patterns.length, numFeatures, -1.0, 1.0, 0.9, 42);
     
 
-    private double[][] getPatterns() {
+    private double[][] getPatterns(boolean rowOfOnes) {
         double [][] tmpPatterns = new double[numFeatures][numFeatures];
         for(int i = 0; i < numFeatures; i++) {
             for (int j = 0; j < numFeatures; j++) {
                 if(i != j) tmpPatterns[i][j] = 1.0;
-                if (i == 0) {
+                if (rowOfOnes && i == 0) {
                     tmpPatterns[i][j] = 1.0;
                 }
-                // if (i == numFeatures - 1) {
-                //     tmpPatterns[i][j] = 0.0;
-                // }
             }
             
         }
@@ -112,26 +110,82 @@ public class BuiltinAmputeTest extends AutomatedTestBase {
 
     @Override
 	public void setUp() {
-		addTestConfiguration(TEST_NAME, new TestConfiguration(TEST_CLASS_DIR, TEST_NAME, new String[]{"B"}));
+        TestConfiguration tc = new TestConfiguration(TEST_CLASS_DIR, TEST_NAME, new String[]{"Test"});
+		addTestConfiguration(TEST_NAME, tc);
 	}
 
     @Test
-    public void testAmputeMCAR() {
-		runAmputeTest(MissingnessMech.MCAR, ExecMode.SINGLE_NODE, false);
+    public void testAmputeMCARstd() {
+        boolean standardized = true;
+        boolean continous = true;
+		runAmputeTest(MissingnessMech.MCAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
 	}
 
     @Test
-	public void testAmputeMAR() {
-		runAmputeTest(MissingnessMech.MAR, ExecMode.SINGLE_NODE, false);
+    public void testAmputeMCARnonStd() {
+        boolean standardized = false;
+        boolean continous = true;
+		runAmputeTest(MissingnessMech.MCAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
+	}
+    
+    @Test
+	public void testAmputeMARstdDiscrete() {
+		boolean standardized = true;
+        boolean continous = false;
+		runAmputeTest(MissingnessMech.MAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
+	}
+    
+    @Test
+    public void testAmputeMARnonStdDiscrete() {
+		boolean standardized = false;
+        boolean continous = false;
+		runAmputeTest(MissingnessMech.MAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
 	}
 
     @Test
-	public void testAmputeMNAR() {
-		runAmputeTest(MissingnessMech.MNAR, ExecMode.SINGLE_NODE, false);
+	public void testAmputeMNARstdDiscrete() {
+		boolean standardized = true;
+        boolean continous = false;
+		runAmputeTest(MissingnessMech.MNAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
+	}
+    
+    @Test
+	public void testAmputeMNARnonStdDiscrete() {
+		boolean standardized = false;
+        boolean continous = false;
+		runAmputeTest(MissingnessMech.MNAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
+	}
+    
+    @Test
+	public void testAmputeMARstdContinous() {
+		boolean standardized = true;
+        boolean continous = true;
+		runAmputeTest(MissingnessMech.MAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
+	}
+    
+    @Test
+	public void testAmputeMARnonStdContinous() {
+		boolean standardized = false;
+        boolean continous = true;
+		runAmputeTest(MissingnessMech.MAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
+	}
+
+    @Test
+	public void testAmputeMNARstdContinous() {
+		boolean standardized = true;
+        boolean continous = true;
+		runAmputeTest(MissingnessMech.MNAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
+	}
+    
+    @Test
+	public void testAmputeMNARnonStdContinous() {
+		boolean standardized = false;
+        boolean continous = true;
+		runAmputeTest(MissingnessMech.MNAR,  standardized, continous, ExecMode.SINGLE_NODE, false);
 	}
 
 
-    private void runAmputeTest(MissingnessMech mech, ExecMode mode, boolean lineage) {
+    private void runAmputeTest(MissingnessMech mech, boolean standardized, boolean continous, ExecMode mode, boolean lineage) {
         ExecMode execModeOld = setExecMode(mode);
         try {
             loadTestConfiguration(getTestConfiguration(TEST_NAME));
@@ -145,7 +199,11 @@ public class BuiltinAmputeTest extends AutomatedTestBase {
                 "freq=" + input("F"),
                 "mech=" + mech.getMech(),
                 "weights=" + input("W"),
+                "std=" + String.valueOf(standardized).toUpperCase(),
+                "cont=" + String.valueOf(continous).toUpperCase(),
                 "amputedData=" + output("AMPD"),
+                "nanMask=" + output("NANMASK"),
+                "amputedRowCount=" + output("AMPDROWS"),
             };
 			if (lineage) {
 				programArgs = (String[]) ArrayUtils.addAll(programArgs, new String[] {
@@ -158,6 +216,8 @@ public class BuiltinAmputeTest extends AutomatedTestBase {
 
             runTest(true, EXCEPTION_NOT_EXPECTED, null, -1);
             MatrixCharacteristics mc = readDMLMetaDataFile("AMPD");
+            // System.out.print(readDMLScalarFromOutputDir("AMPDROWS").toString());
+            // System.out.print(readDMLMatrixFromOutputDir("NANMASK").toString());
             Assert.assertEquals(numSamples, mc.getRows());
 			Assert.assertEquals(numFeatures, mc.getCols());
 
