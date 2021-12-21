@@ -20,15 +20,15 @@
 #-------------------------------------------------------------
 
 dataIn = read($data)
-propIn = $prop
 patternsIn = read($patterns)
 freqIn = read($freq)
-mechIn = $mech
 weightsIn = read($weights)
 
-amputedData = ampute(data=dataIn, prop=propIn, patterns=patternsIn, freq=freqIn, mech=mechIn, weights=weightsIn, std=$std, cont=$cont)
+amputedData = ampute(data=dataIn, prop=$prop, patterns=patternsIn, freq=freqIn, mech=$mech, weights=weightsIn, std=$std, cont=$cont)
 write(amputedData, $amputedData)
 nanMask = is.na(amputedData)
 write(nanMask, $nanMask)
 amputedRowCount = sum(rowSums(nanMask) > 0)
 write(amputedRowCount, $amputedRowCount)
+amputedCellCount = sum(nanMask)
+write(amputedCellCount, $amputedCellCount)

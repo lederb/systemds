@@ -57,11 +57,11 @@ public class BuiltinAmputeTest extends AutomatedTestBase {
 	private final static String TEST_DIR = "functions/builtin/";
 	private static final String TEST_CLASS_DIR = TEST_DIR + BuiltinAmputeTest.class.getSimpleName() + "/";
 
-    private final static int numSamples = 1000;
-	private final static int numFeatures = 7;
+    private final static int numSamples = 10000;
+	private final static int numFeatures = 14;
 
-    private final double[][] D = getRandomMatrix(numSamples, numFeatures, 1, 10, 1.0, 42);
-    private final double prop = 0.5;
+    private final double[][] data = getRandomMatrix(numSamples, numFeatures, 1, 10, 1.0, 42);
+    private final double prop = 0.25;
     private final double[][] patterns = getPatterns(false);
     private final double[][] frequencies = getFrequencies(true);
     private final double[][] weights = getRandomMatrix(patterns.length, numFeatures, -1.0, 1.0, 0.9, 42);
@@ -193,31 +193,32 @@ public class BuiltinAmputeTest extends AutomatedTestBase {
 			fullDMLScriptName = HOME + TEST_NAME + ".dml";
             programArgs = new String[]{
                 "-nvargs", 
-                "data="+input("D"),
+                "data="+input("data"),
                 "prop="+String.valueOf(prop), 
-                "patterns=" + input("P"),
-                "freq=" + input("F"),
+                "patterns=" + input("patterns"),
+                "freq=" + input("freq"),
                 "mech=" + mech.getMech(),
-                "weights=" + input("W"),
+                "weights=" + input("weights"),
                 "std=" + String.valueOf(standardized).toUpperCase(),
                 "cont=" + String.valueOf(continous).toUpperCase(),
-                "amputedData=" + output("AMPD"),
-                "nanMask=" + output("NANMASK"),
-                "amputedRowCount=" + output("AMPDROWS"),
+                "amputedData=" + output("amputedData"),
+                "nanMask=" + output("nanMask"),
+                "amputedRowCount=" + output("amputedRowCount"),
+                "amputedCellCount=" + output("amputedCellCount"),
             };
 			if (lineage) {
 				programArgs = (String[]) ArrayUtils.addAll(programArgs, new String[] {
 					"-stats","-lineage", ReuseCacheType.REUSE_HYBRID.name().toLowerCase()});
 			}
-            writeInputMatrixWithMTD("D", D, false);
-            writeInputMatrixWithMTD("P", patterns, false);
-            writeInputMatrixWithMTD("F", frequencies, false);
-            writeInputMatrixWithMTD("W", weights, false);
+            writeInputMatrixWithMTD("data", data, false);
+            writeInputMatrixWithMTD("patterns", patterns, false);
+            writeInputMatrixWithMTD("freq", frequencies, false);
+            writeInputMatrixWithMTD("weights", weights, false);
 
             runTest(true, EXCEPTION_NOT_EXPECTED, null, -1);
-            MatrixCharacteristics mc = readDMLMetaDataFile("AMPD");
-            // System.out.print(readDMLScalarFromOutputDir("AMPDROWS").toString());
-            // System.out.print(readDMLMatrixFromOutputDir("NANMASK").toString());
+            MatrixCharacteristics mc = readDMLMetaDataFile("amputedData");
+            // System.out.print(readDMLScalarFromOutputDir("amputedRowCount").toString());
+            // System.out.print(readDMLScalarFromOutputDir("amputedCellCount").toString());
             Assert.assertEquals(numSamples, mc.getRows());
 			Assert.assertEquals(numFeatures, mc.getCols());
 

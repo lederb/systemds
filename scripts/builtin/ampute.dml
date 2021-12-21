@@ -217,9 +217,9 @@ m_ampute = function(Matrix[Double] data, Double prop = 0.5, Matrix[Double] patte
       } else {
         [scores, candidateMasks] = ampute_sum_scores(P, data, std, weights, patterns)
         if (!cont) {
-          R = ampute_ampute_discrete(P, scores, candidateMasks, prop, odds)
+          R = ampute_ampute_discrete(scores, candidateMasks, prop, odds)
         } else {
-          R = ampute_ampute_continous(P, scores, candidateMasks, prop, type)
+          R = ampute_ampute_continous(scores, candidateMasks, round(prop * 1e+3)/1e+3, type)
         }
       }
       amputedData = ampute_apply_missing_data(data, patterns, P, R)
@@ -310,22 +310,28 @@ ampute_prob_sample_replace = function(Matrix[Double] sampleValues, Matrix[Double
     stop("ERROR: sum of probabilities is " + sum(probabilities) + " but has to be 1")
   }
 
-  valueProbMap = cbind(probabilities, sampleValues)
-  ordered = order(target=valueProbMap, by=1, decreasing=TRUE, index.return=FALSE)
-  ordered[,1] = cumsum(ordered[,1])
-  randoms = rand(rows=sampleSize, cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
-  samples = matrix(0, rows=sampleSize, cols=1)
-  for (i in 1:nrow(randoms)) {
-    break = FALSE
-    j = 1
-    while (!break & j < nrow(ordered) + 1) {
-      if (as.scalar(randoms[i,1]) <= as.scalar(ordered[j,1])) {
-        samples[i,1] = ordered[j,2]
-        break = TRUE
-      }
-      j = j + 1 
-    }
+  orderedCumProbs = order(target=cumsum(probabilities), by=1, decreasing=TRUE, index.return=FALSE)
+  randoms = rand(rows=sampleSize, cols=1, pdf="uniform", sparsity=1.0)
+  samples = matrix(nrow(orderedCumProbs), rows=sampleSize, cols=1)
+  for (i in 2:nrow(orderedCumProbs)) {
+    samples = samples - (randoms <= as.scalar(orderedCumProbs[i,1]))
   }
+  #valueProbMap = cbind(probabilities, sampleValues)
+  #ordered = order(target=valueProbMap, by=1, decreasing=TRUE, index.return=FALSE)
+  #ordered[,1] = cumsum(ordered[,1])
+  #randoms = rand(rows=sampleSize, cols=1, min=0, max=1, pdf="uniform", sparsity=1.0)
+  #samples = matrix(0, rows=sampleSize, cols=1)
+  #for (i in 1:nrow(randoms)) {
+  #  break = FALSE
+  #  j = 1
+  #  while (!break & j < nrow(ordered) + 1) {
+  #    if (as.scalar(randoms[i,1]) <= as.scalar(ordered[j,1])) {
+  #      samples[i,1] = ordered[j,2]
+  #      break = TRUE
+  #    }
+  #    j = j + 1
+  #  }
+  #}
 }
 ########################################################################################################################
 ampute_sum_scores = function(Matrix[Double] P, Matrix[Double] data, Boolean std, Matrix[Double] weights, Matrix[Double] patterns) 
@@ -347,78 +353,190 @@ ampute_sum_scores = function(Matrix[Double] P, Matrix[Double] data, Boolean std,
       if (length(patternScores) > 1) {
         patternScores = scale(X=patternScores, center=TRUE, scale=TRUE)
       }
-      initIndex = 1
-      for (r in 1:nrow(scores)) {
-        if (as.scalar(patternCandidatesMask[r, 1]) == 1) {
-          scores[r,1] = patternScores[initIndex, 1]
-          initIndex = initIndex + 1
-        }
-      }
+      patternCandidatesIndices = removeEmpty(target=patternCandidatesMask * seq(1,nrow(patternCandidatesMask),1), 
+                                              margin="rows", select=patternCandidatesMask);
+      scores = scores + table(patternCandidatesIndices, 1, patternScores, nrow(scores), 1)
     }
   }
-  #expecting nrow(P) ones
-  #checkMat = matrix(1, rows=nrow(P), cols=nrow(patterns))
-  #assert(sum(candidateMasks == checkMat) == nrow(P))
+  ### sanity assertion
   #expecting one 1 per row in candidateMasks
-  #checkVec = matrix(1, rows=nrow(P), cols=1)
-  #assert(sum(rowSums(candidateMasks) == checkVec) == nrow(P))
+  assert(sum(rowSums(candidateMasks) == 1) == nrow(P))
   
 }
 ########################################################################################################################
 ampute_ampute_mcar = function(Matrix[Double] P, Matrix[Double] patterns, Double prop) 
   return(Matrix[Double] R) 
 {
-  R = !(rand(rows=nrow(P), cols=nrow(patterns), min=0, max=1, pdf="uniform", sparsity=1) < prop)
+  R = rand(rows=nrow(P), cols=nrow(patterns), pdf="uniform", sparsity=1) >= prop
 }
 ########################################################################################################################
-ampute_ampute_discrete = function(Matrix[Double] P, Matrix[Double] scores, Matrix[Double] candidateMasks, Double prop, Matrix[Double] odds) 
+ampute_ampute_discrete = function(Matrix[Double] scores, Matrix[Double] candidateMasks, Double prop, Matrix[Double] odds) 
   return(Matrix[Double] R) 
 {
-  Rtemp = matrix(0, rows=nrow(P), cols=ncol(candidateMasks))
+  Rtemp = matrix(0, rows=nrow(candidateMasks), cols=ncol(candidateMasks))
   for (p in 1:ncol(candidateMasks)){
     if (sum(candidateMasks[,p]) > 0) {
       oddsOfPattern = removeEmpty(target=odds[p,], margin="rows", select=is.na(odds[p,]))
-      ng = length(oddsOfPattern)
+      numGroups = length(oddsOfPattern)
       scoresOfPattern = removeEmpty(target=scores, margin="rows", select=candidateMasks[,p])
-      qPs = seq(0,1,1.0/ng)
+      qPs = seq(0,1,1.0/numGroups)
       quantiles = quantile(scoresOfPattern, qPs)
       # check for sample too small -> not unique quantiles
-      I = rbind(matrix (1,1,1), (quantiles[1:nrow(quantiles)-1,] != quantiles[2:nrow(quantiles),]))
-      uniqueQuantiles = removeEmpty (target=quantiles, margin="rows", select = I)
+      I = rbind(matrix(1,1,1), (quantiles[1:nrow(quantiles)-1,] != quantiles[2:nrow(quantiles),]))
+      uniqueQuantiles = removeEmpty(target=quantiles, margin="rows", select = I)
       if (length(uniqueQuantiles) < length(qPs) | sum(is.na(quantiles)) > 0 ) {
         stop("Division of sum scores into quantiles did not succeed. Possibly" +
              " the sum scores contain too few different observations (in case of" +
              " categorical or dummy variables). Try using more variables to" +
              " calculate the sum scores or diminish the number of quantiles in the" +
              " odds matrix")
-      }
+     }
       # For each candidate the quantile number of a candidate is specified
-      for (qIndex in 1:ng) {
+      for (qIndex in 1:numGroups) {
         Rtemp[,p] = Rtemp[,p] + (candidateMasks[,p] & (scores >= quantiles[qIndex,]))
       }      
-      probVec = t((ng * prop * oddsOfPattern) / sum(oddsOfPattern))
+      probVec = t((numGroups * prop * oddsOfPattern) / sum(oddsOfPattern))
       if (sum(probVec >= 1) > 0) {
         print("Warning: Combination of odds matrix and desired proportion of" +
               " missingness results to small quantile groups, probably" +
               " decreasing the obtained proportion of missingness")
       }
       
-      for (qIndex in 1:ng) {
+      for (qIndex in 1:numGroups) {
         Rtemp[,p] = replace(target=Rtemp[,p], pattern=qIndex, replacement=as.scalar(probVec[qIndex,1]))
       }
     }
   }
   # zeros will be used for indicating replacement
   Rtemp = replace(target=Rtemp, pattern=0, replacement=NaN)
-  randoms = rand(rows=nrow(Rtemp), cols=ncol(Rtemp), min=0, max=1, pdf="uniform", sparsity=1)
+  randoms = rand(rows=nrow(Rtemp), cols=ncol(Rtemp), pdf="uniform", sparsity=1)
   # inversion of <= instead of > because of NaNs
   R = !(randoms <= Rtemp)
 }
 ########################################################################################################################
-ampute_ampute_continous = function(Matrix[Double] P, Matrix[Double] scores, Matrix[Double] candidateMasks, Double prop, Matrix[Double] type) 
+ampute_ampute_continous = function(Matrix[Double] scores, Matrix[Double] candidateMasks, Double prop, Matrix[Double] type) 
   return(Matrix[Double] R) 
 {
-  R = !(rand(rows=nrow(P), cols=ncol(candidateMasks), min=0, max=1, pdf="uniform", sparsity=1.0) < 1)
+  
+  R = matrix(1, rows=nrow(candidateMasks), cols=ncol(candidateMasks))
+  testset = scale(X=rand(rows=10000, cols=1, pdf="normal"), center=TRUE, scale=TRUE)
+  
+  if (length(type) == 1) {
+    type = matrix(as.scalar(type[1,1]), rows=ncol(candidateMasks), cols=1)
+  }
+  for (p in 1:ncol(candidateMasks)) {
+    candidatesOfPattern = candidateMasks[,p]
+    scoresOfPattern = removeEmpty(target=scores, margin="rows", select=candidatesOfPattern)
+    if (sum(candidatesOfPattern) == 1 & sum(scoresOfPattern) == 0) {
+      R[,p] = candidatesOfPattern
+    } else {
+      if (sum(candidatesOfPattern) == 1) {
+        probs = matrix(prop, rows=nrow(scoresOfPattern), cols=1)
+      } else {
+        range = matrix("-8 8", rows=2, cols=1);
+        [flag, shift, value] = ampute_binSearch(as.scalar(type[p,1]), testset, length(testset), 
+                                                range, prop, ceil(min(range)), floor(max(range)), 100);
+        probs = ampute_formula(as.scalar(type[p,1]), scoresOfPattern, shift)
+      }
+      binom = rand(rows=nrow(probs), cols=1, pdf="uniform", sparsity=1) < probs;
+      candidateIndices = removeEmpty(target=candidatesOfPattern * seq(1,nrow(candidatesOfPattern), 1), 
+                                      margin="rows", select=candidatesOfPattern);
+      R[,p] = !table(candidateIndices, 1, binom, nrow(candidatesOfPattern), 1)                
+    }
+  }
+}
+########################################################################################################################
+ampute_logistic = function(Matrix[Double] x) return(Matrix[Double] result) 
+{
+    re = exp(x)
+    result = re / (1 + re)
+}
+ampute_leftFun = function (Matrix[Double] x, Double b) return(Matrix[Double] result) 
+{
+  result = ampute_logistic(mean(x) - x + b)
+}
+ampute_midFun = function (Matrix[Double] x, Double b) return(Matrix[Double] result) 
+{
+  result = ampute_logistic(-abs(x - mean(x)) + 0.75 + b)
+}
+ampute_tailFun = function (Matrix[Double] x, Double b) return(Matrix[Double] result) 
+{
+  result = ampute_logistic(abs(x - mean(x)) - 0.75 + b)
+}
+ampute_rightFun = function (Matrix[Double] x, Double b) return(Matrix[Double] result) 
+{
+  result = ampute_logistic(x + b - mean(x))
+}
+ampute_formula = function(Double selectedType, Matrix[Double] x, Double b) return(Matrix[Double] result) {
+  if (selectedType == -1) {
+    result = ampute_leftFun(x, b)
+  }
+  else if (selectedType == 0) {
+    result = ampute_midFun(x, b)
+  }
+  else if (selectedType == 2) {
+    result = ampute_tailFun(x, b)
+  } else {
+    result = ampute_rightFun(x, b)
+  }
+}
+ampute_calcShift = function(Double selectedType, Matrix[Double] x, Double b, Double testSetLength) 
+  return(Double result) 
+{
+  tmp = ampute_formula(selectedType, x, b)
+  result = sum(tmp) / testSetLength
+}
+ampute_binSearch = function(Double selectedType, Matrix[Double] x, Double testSetLength, Matrix[Double] range, Double target, Double lower, Double upper, Double maxIter)
+  return(String flag, Double where, Double value) 
+{
+  lo = lower
+  hi = upper
+  counter = 0
+  shift_lo = ampute_calcShift(selectedType, x, lo, testSetLength) 
+  shift_hi = ampute_calcShift(selectedType, x, hi, testSetLength)
+  val_lo = round(shift_lo * 1e+3) / 1e+3
+  val_hi = round(shift_hi * 1e+3) / 1e+3
+  if (val_lo > val_hi) {
+    sign = -1
+  } else {
+    sign = 1
+  }
+  if ((target * sign > val_hi * sign) | (target * sign < val_lo * sign)) {
+    outside_range = TRUE
+  } else {
+    outside_range = FALSE
+  }
+  while(counter < maxIter & 
+        !outside_range & 
+        !(hi - lo <= (1e-3) | lo < lower | hi > upper)) {
+    counter = counter + 1
+    center = round(((hi - lo) / 2 + lo) * 1e+3) / 1e+3
+    val = round(ampute_calcShift(selectedType, x, center, testSetLength) * 1e+3) / 1e+3
+    if (val == target) {
+      val_lo = val; val_hi = val; lo = center; hi = center;
+    } else if (sign * val < sign * target) {
+      lo = center; val_lo = val;
+    } else {
+      hi = center; val_hi = val;
+    }
+  }
+  if(outside_range) {
+    if (target * sign < val_lo * sign) {
+      print("Warning: the desired proportion of " + target + " is too small; " + val_lo + " is used instead")
+      flag = "Lower Boundary"; where = lo; value = val_lo;
+    } else {
+      print("Warning: the desired proportion of " + target + " is too large; " + val_hi + " is used instead")
+      flag = "Upper Boundary"; where = hi; value = val_hi;
+    }
+  } else if (counter >= maxIter) {
+    flag = "Maximum number of iterations reached"; where = (lo + hi) / 2; value = (val_lo + val_hi) / 2;
+  } else if (val_lo == target) {
+    flag = "Found"; where = lo; value = val_lo;
+  } else if (val_hi == target) {
+    flag = "Found"; where = hi; value = val_hi;
+  } else {
+    flag = "Between elements"; where = (lo + hi) / 2; value = (val_lo + val_hi) / 2;
+  }
 }
 ########################################################################################################################
 ampute_apply_missing_data = function(Matrix[Double] data, Matrix[Double] patterns, Matrix[Double] P, Matrix[Double] R)
