@@ -37,7 +37,7 @@
 #                                       with which the patterns should occur.
 #                                       Default is generated if necessary.
 # mech            String    ---        A string specifying the missingness mechanism, either "MCAR", "MAR" or "MNAR".
-#                                       Default is "MAR".
+#                                       Default is "MAR". (Difference between "MAR" and "MNAR" relies on weights)
 # weights         Double    ---        A matrix or data frame of size #patterns by #variables.
 #                                       The matrix contains the weights that will be used to calculate the weighted sum scores.
 #                                       Default is generated if necessary.
@@ -268,7 +268,7 @@ ampute_recalculate_prop = function (Double prop, Matrix[Double] data, Matrix[Dou
   # https://github.com/amices/mice/blob/4a7a2a3c4f6035619226049a236b550236a148df/R/ampute.R
   # don't know why expected missed cells is calculatued using ncol(data)^2
   miss = prop * nrow(data) * ncol(data)
-  sumCases = as.scalar(t(miss * freq) %*% (matrix(1.0, rows=nrow(patterns), cols=1) / rowSums(patterns == 0)))
+  sumCases = as.scalar(t(miss * freq) %*% (1 / rowSums(patterns == 0)))
   if (sumCases > nrow(data)) {
     stop("@ampute Error: Proportion of missing cells is too large in combination with the desired number of missing variables")
   } else {
